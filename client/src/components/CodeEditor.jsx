@@ -22,21 +22,19 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
         setLanguage(map[ext] || 'plaintext');
     }, [fileName]);
 
-    // 1. Force Load Content Immediately (Fixes "Blank Screen" on refresh)
+    // 1. Force Load Content Immediately (Ensures no blank screen on refresh)
     useEffect(() => {
         const loadContent = async () => {
             if (!fileUrl || !editorRef.current) return;
             
             try {
                 setIsFetching(true);
-                // Add ?t=... to prevent browser caching old versions
                 const response = await axios.get(`${fileUrl}?t=${Date.now()}`);
                 const content = typeof response.data === 'string' 
                     ? response.data 
                     : JSON.stringify(response.data, null, 2);
                 
-                // Only set value if editor is empty or we are forcing a load
-                // (This prevents overwriting if you are already typing)
+                // Only set value if editor is empty to avoid interrupting a live session
                 if (editorRef.current.getValue() === '') {
                     editorRef.current.setValue(content);
                 }
@@ -51,16 +49,14 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
         loadContent();
     }, [fileUrl, fileId]);
 
-    // 2. Setup Real-Time Collaboration (Yjs + WebSocket)
+    // 2. Setup Real-Time Collaboration with Awareness (Cursors)
     function handleEditorDidMount(editor, monaco) {
         editorRef.current = editor;
         
-        // Define the WebSocket URL
-        // If on localhost, use local port 1234
-        // If on Vercel, use your Render WebSocket URL
-        const wsProvider = window.location.hostname === 'localhost'
-    ? 'ws://localhost:1234'
-    : 'wss://devsync-socket.onrender.com'; // Changed https to wss// <--- REPLACE THIS WITH YOUR REAL RENDER URL
+        // Protocol check: must use wss:// for production
+        const wsProviderUrl = window.location.hostname === 'localhost'
+            ? 'ws://localhost:1234'
+            : 'wss://devsync-socket.onrender.com'; // YOUR ACTUAL RENDER URL
 
         let provider;
         let binding;
@@ -68,11 +64,19 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
 
         try {
             ydoc = new Y.Doc();
-            provider = new WebsocketProvider(wsProvider, `devsync-room-${fileId}`, ydoc);
+            provider = new WebsocketProvider(wsProviderUrl, `devsync-room-${fileId}`, ydoc);
             const ytext = ydoc.getText('monaco');
             
-            // Bind Yjs to Monaco Editor
-            binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), provider.awareness);
+            // --- Awareness Setup (Prevents "Crashing" between lines) ---
+            const awareness = provider.awareness;
+            awareness.setLocalStateField('user', {
+                name: 'User ' + Math.floor(Math.random() * 100),
+                color: '#' + Math.floor(Math.random()*16777215).toString(16)
+            });
+
+            // Bind with Awareness
+            binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness);
+            
         } catch (err) {
             console.error("WebSocket connection failed:", err);
         }
@@ -82,7 +86,7 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
             saveCode();
         });
 
-        // Cleanup when closing file
+        // Cleanup
         return () => {
             if (binding) binding.destroy();
             if (provider) provider.destroy();
@@ -90,7 +94,6 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
         };
     }
 
-    // Save to Cloud
     const saveCode = async () => {
         if (!editorRef.current) return;
         setIsSaving(true);
@@ -109,7 +112,6 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
         }
     };
 
-    // Download Function
     const downloadCode = () => {
         if (!editorRef.current) return;
         const content = editorRef.current.getValue();
@@ -138,7 +140,6 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
         };
 
         const runtime = runtimeMap[language];
-
         if (!runtime) {
             setOutput(`Error: Execution not supported for ${language} yet.`);
             setIsRunning(false);
@@ -163,7 +164,6 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
 
     return (
         <div className="flex flex-col h-full w-full bg-[#0d1117]">
-            {/* Header */}
             <div className="h-12 bg-[#010409] flex items-center justify-between px-4 border-b border-[#30363d] shrink-0">
                 <div className="flex items-center gap-2">
                     <div className="px-3 py-1 bg-[#0d1117] border border-[#30363d] text-sm text-gray-200 rounded flex items-center gap-2">
@@ -196,7 +196,6 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
                         language={language}
                         theme="vs-dark"
                         onMount={handleEditorDidMount}
-                        loading={<div className="text-gray-500 p-4">Loading Editor...</div>}
                         options={{ minimap: { enabled: false }, fontSize: 14, fontFamily: '"Fira Code", monospace', automaticLayout: true, padding: { top: 16, bottom: 16 } }}
                     />
                 </div>
