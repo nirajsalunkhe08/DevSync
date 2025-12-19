@@ -8,7 +8,7 @@ const File = require('./models/File');
 
 const app = express();
 app.use(cors({
-    origin: ["http://localhost:5173", "https://YOUR-VERCEL-APP.vercel.app"],
+    origin: ["http://localhost:5173", "https://dev-sync-ivory.vercel.app"],
     credentials: true
 }));
 app.use(express.json());
