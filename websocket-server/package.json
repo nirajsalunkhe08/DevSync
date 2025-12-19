@@ -1,0 +1,13 @@
+{
+  "name": "devsync-websocket",
+  "version": "1.0.0",
+  "description": "Real-time collaboration server for DevSync",
+  "main": "index.js",
+  "scripts": {
+    "start": "HOST=0.0.0.0 PORT=$PORT npx y-websocket"
+  },
+  "dependencies": {
+    "y-websocket": "^1.5.0"
+  },
+  "keywords": []
+}
