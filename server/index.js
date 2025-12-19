@@ -7,7 +7,10 @@ const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/cl
 const File = require('./models/File');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: ["http://localhost:5173", "https://YOUR-VERCEL-APP.vercel.app"],
+    credentials: true
+}));
 app.use(express.json());
 
 // 1. Connect to MongoDB
