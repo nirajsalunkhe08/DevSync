@@ -50,25 +50,29 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
     }, [fileUrl, fileId]);
 
     // 2. Setup Real-Time Collaboration with Awareness (Cursors)
-async function handleEditorDidMount(editor, monaco) {
+// 1. Stable Handle Mount with Sequential Loading
+    async function handleEditorDidMount(editor, monaco) {
         editorRef.current = editor;
 
-        // 1. FIRST: Fetch the latest content from the cloud
+        // Step A: Load initial content from Cloud BEFORE starting sync
         if (fileUrl) {
             try {
+                setIsFetching(true);
                 const response = await axios.get(`${fileUrl}?t=${Date.now()}`);
-                const cloudContent = typeof response.data === 'string' 
+                const initialContent = typeof response.data === 'string' 
                     ? response.data 
                     : JSON.stringify(response.data, null, 2);
                 
-                // Set the initial content before binding Yjs
-                editor.setValue(cloudContent);
+                // Force set the value so both devices start from the same state
+                editor.setValue(initialContent);
             } catch (err) {
                 console.error("Initial load failed:", err);
+            } finally {
+                setIsFetching(false);
             }
         }
 
-        // 2. SECOND: Now bind the WebSocket for live updates
+        // Step B: Setup WebSocket AFTER content is loaded to prevent word mismatching
         const wsProviderUrl = window.location.hostname === 'localhost'
             ? 'ws://localhost:1234'
             : 'wss://devsync-socket.onrender.com';
@@ -84,11 +88,23 @@ async function handleEditorDidMount(editor, monaco) {
                 color: '#' + Math.floor(Math.random()*16777215).toString(16)
             });
 
-            // Bind after the initial value is set to keep lines aligned
+            // Bind Yjs to the editor model with awareness
             const binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness);
+
+            // Step C: Cleanup
+            return () => {
+                binding.destroy();
+                provider.destroy();
+                ydoc.destroy();
+            };
         } catch (err) {
             console.error("WebSocket connection failed:", err);
         }
+
+        // Shortcut: Ctrl + S
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            saveCode();
+        });
     }
 
     const saveCode = async () => {
