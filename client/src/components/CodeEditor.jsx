@@ -51,60 +51,68 @@ const CodeEditor = ({ fileId, fileName, fileUrl }) => {
 
     // 2. Setup Real-Time Collaboration with Awareness (Cursors)
 // 1. Stable Handle Mount with Sequential Loading
-    async function handleEditorDidMount(editor, monaco) {
+async function handleEditorDidMount(editor, monaco) {
         editorRef.current = editor;
 
-        // Step A: Load initial content from Cloud BEFORE starting sync
-        if (fileUrl) {
-            try {
-                setIsFetching(true);
-                const response = await axios.get(`${fileUrl}?t=${Date.now()}`);
-                const initialContent = typeof response.data === 'string' 
-                    ? response.data 
-                    : JSON.stringify(response.data, null, 2);
-                
-                // Force set the value so both devices start from the same state
-                editor.setValue(initialContent);
-            } catch (err) {
-                console.error("Initial load failed:", err);
-            } finally {
-                setIsFetching(false);
-            }
-        }
+        // --- 1. SET UP YJS DOCUMENT ---
+        const ydoc = new Y.Doc();
+        const ytext = ydoc.getText('monaco');
 
-        // Step B: Setup WebSocket AFTER content is loaded to prevent word mismatching
+        // --- 2. CONNECT WEBSOCKET ---
         const wsProviderUrl = window.location.hostname === 'localhost'
             ? 'ws://localhost:1234'
             : 'wss://devsync-socket.onrender.com';
 
-        try {
-            const ydoc = new Y.Doc();
-            const provider = new WebsocketProvider(wsProviderUrl, `devsync-room-${fileId}`, ydoc);
-            const ytext = ydoc.getText('monaco');
-            
-            const awareness = provider.awareness;
-            awareness.setLocalStateField('user', {
-                name: 'User ' + Math.floor(Math.random() * 100),
-                color: '#' + Math.floor(Math.random()*16777215).toString(16)
-            });
+        const provider = new WebsocketProvider(wsProviderUrl, `devsync-v2-${fileId}`, ydoc);
 
-            // Bind Yjs to the editor model with awareness
-            const binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness);
-
-            // Step C: Cleanup
-            return () => {
-                binding.destroy();
-                provider.destroy();
-                ydoc.destroy();
-            };
-        } catch (err) {
-            console.error("WebSocket connection failed:", err);
-        }
-
-        // Shortcut: Ctrl + S
-        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-            saveCode();
+        // --- 3. HANDLE INITIAL CONTENT INJECTION ---
+        // We only pull from Cloud if the WebSocket room is brand new/empty
+        provider.on('sync', async (isSynced) => {
+            if (isSynced && ytext.toString() === '') {
+                console.log("Room is empty, pulling from Cloud Storage...");
+                try {
+                    const response = await axios.get(`${fileUrl}?t=${Date.now()}`);
+                    const cloudContent = typeof response.data === 'string' 
+                        ? response.data 
+                        : JSON.stringify(response.data, null, 2);
+                    
+                    // We use ytext.insert so that it syncs to ALL connected clients immediately
+                    ydoc.transact(() => {
+                        ytext.insert(0, cloudContent);
+                    });
+                } catch (err) {
+                    console.error("Cloud fallback failed:", err);
+                }
+            }
         });
+
+        // --- 4. ADVANCED AWARENESS (Cursor Tracking) ---
+        const awareness = provider.awareness;
+        const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+        
+        awareness.setLocalStateField('user', {
+            name: `Dev-${Math.floor(Math.random() * 1000)}`,
+            color: color
+        });
+
+        // --- 5. BIND MONACO ---
+        const binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness);
+
+        // --- 6. OPTIMIZED CURSOR CSS ---
+        // This makes the other person's cursor actually visible as a colored line
+        const style = document.createElement('style');
+        style.innerHTML = `
+            .yRemoteSelection { background-color: ${color}4d; }
+            .yRemoteSelectionHead { border-left: 2px solid ${color}; }
+        `;
+        document.head.appendChild(style);
+
+        // Cleanup
+        return () => {
+            binding.destroy();
+            provider.destroy();
+            ydoc.destroy();
+        };
     }
 
     const saveCode = async () => {
