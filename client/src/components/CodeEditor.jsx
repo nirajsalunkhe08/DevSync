@@ -1,0 +1,228 @@
+import React, { useRef, useEffect, useState } from 'react';
+import Editor from '@monaco-editor/react';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
+import { MonacoBinding } from 'y-monaco';
+// 1. Import Download Icon
+import { Play, Terminal as TerminalIcon, Loader2, Save, Download } from 'lucide-react';
+import axios from 'axios';
+
+const CodeEditor = ({ fileId, fileName, fileUrl }) => {
+    const editorRef = useRef(null);
+    const [language, setLanguage] = useState('javascript');
+    const [output, setOutput] = useState('Terminal Ready...');
+    const [isRunning, setIsRunning] = useState(false);
+    const [isFetching, setIsFetching] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    
+    // Language Detection
+    useEffect(() => {
+        if (!fileName) return;
+        const ext = fileName.split('.').pop();
+        const map = { js: 'javascript', py: 'python', java: 'java', cpp: 'cpp', c: 'c', html: 'html', css: 'css' };
+        setLanguage(map[ext] || 'plaintext');
+    }, [fileName]);
+
+    // Yjs & Editor Setup
+    function handleEditorDidMount(editor, monaco) {
+        editorRef.current = editor;
+        const ydoc = new Y.Doc();
+        // NOTE: Keeping WebSocket as localhost. For production sync, you'd deploy y-websocket separately.
+        const provider = new WebsocketProvider('ws://localhost:1234', `devsync-local-v1-${fileId}`, ydoc);
+        const ytext = ydoc.getText('monaco');
+
+        provider.on('sync', async (isSynced) => {
+            if (isSynced) {
+                if (ytext.toString() === '') {
+                    if (fileUrl) {
+                        try {
+                            setIsFetching(true);
+                            const response = await axios.get(fileUrl);
+                            if (ytext.toString() === '') {
+                                ydoc.transact(() => {
+                                    ytext.delete(0, ytext.length); 
+                                    ytext.insert(0, typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2));
+                                });
+                            }
+                        } catch (error) {
+                            console.error("Failed to fetch file content:", error);
+                            ytext.insert(0, "// Error loading file content.");
+                        } finally {
+                            setIsFetching(false);
+                        }
+                    } else {
+                        ytext.insert(0, "// Start coding...");
+                    }
+                }
+            }
+        });
+
+        const binding = new MonacoBinding(ytext, editor.getModel(), new Set([editor]), provider.awareness);
+
+        // Shortcut: Ctrl + S
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            saveCode();
+        });
+
+        return () => {
+            binding.destroy();
+            provider.destroy();
+            ydoc.destroy();
+        };
+    }
+
+    // Save to Cloud
+    const saveCode = async () => {
+        if (!editorRef.current) return;
+        setIsSaving(true);
+        const content = editorRef.current.getValue();
+
+        try {
+            // UPDATED URL
+            await axios.put(`${import.meta.env.VITE_API_URL}/api/file/${fileId}`, {
+                content: content
+            });
+            setOutput("File saved successfully to Cloud! ☁️\n");
+        } catch (error) {
+            setOutput("Error saving file. Check server logs.\n");
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // 2. NEW: Download Function
+    const downloadCode = () => {
+        if (!editorRef.current) return;
+        const content = editorRef.current.getValue();
+        
+        // Create a fake blob link to trigger download
+        const element = document.createElement("a");
+        const file = new Blob([content], {type: 'text/plain'});
+        element.href = URL.createObjectURL(file);
+        element.download = fileName; // Use the actual filename
+        document.body.appendChild(element); // Required for this to work in FireFox
+        element.click();
+        document.body.removeChild(element);
+        
+        setOutput("File downloaded to your computer! ⬇️\n");
+    };
+
+    const runCode = async () => {
+        if (!editorRef.current) return;
+        const sourceCode = editorRef.current.getValue();
+        setIsRunning(true);
+        setOutput("Running code...\n");
+
+        const runtimeMap = {
+            'javascript': { language: 'javascript', version: '18.15.0' },
+            'python': { language: 'python', version: '3.10.0' },
+            'java': { language: 'java', version: '15.0.2' },
+            'c': { language: 'c', version: '10.2.0' },
+            'cpp': { language: 'c++', version: '10.2.0' }
+        };
+
+        const runtime = runtimeMap[language];
+
+        if (!runtime) {
+            setOutput(`Error: Execution not supported for ${language} yet.`);
+            setIsRunning(false);
+            return;
+        }
+
+        try {
+            await saveCode(); 
+            const response = await axios.post('https://emkc.org/api/v2/piston/execute', {
+                language: runtime.language,
+                version: runtime.version,
+                files: [{ content: sourceCode }]
+            });
+            const { run } = response.data;
+            setOutput(run.output || "No output returned.");
+        } catch (error) {
+            setOutput("Error running code: Failed to connect to compiler.");
+        } finally {
+            setIsRunning(false);
+        }
+    };
+
+    return (
+        <div className="flex flex-col h-full w-full bg-[#0d1117]">
+            {/* Header */}
+            <div className="h-12 bg-[#010409] flex items-center justify-between px-4 border-b border-[#30363d] shrink-0">
+                <div className="flex items-center gap-2">
+                    <div className="px-3 py-1 bg-[#0d1117] border border-[#30363d] text-sm text-gray-200 rounded flex items-center gap-2">
+                        <span className="font-mono text-xs opacity-50">{language}</span>
+                        <span className="font-bold">{fileName}</span>
+                    </div>
+                    {isFetching && <Loader2 size={14} className="animate-spin text-blue-400"/>}
+                </div>
+                
+                <div className="flex items-center gap-2">
+                    {/* NEW: DOWNLOAD BUTTON */}
+                    <button 
+                        onClick={downloadCode}
+                        className="flex items-center gap-2 bg-[#21262d] hover:bg-[#30363d] text-gray-200 border border-[#30363d] px-3 py-1.5 rounded text-xs font-bold transition"
+                        title="Download to Computer"
+                    >
+                        <Download size={14} />
+                        <span className="hidden sm:inline">Download</span>
+                    </button>
+
+                    {/* SAVE BUTTON */}
+                    <button 
+                        onClick={saveCode}
+                        disabled={isSaving}
+                        className="flex items-center gap-2 bg-[#21262d] hover:bg-[#30363d] text-gray-200 border border-[#30363d] px-3 py-1.5 rounded text-xs font-bold transition disabled:opacity-50"
+                        title="Save (Ctrl + S)"
+                    >
+                        {isSaving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14} />}
+                        <span className="hidden sm:inline">{isSaving ? 'Saving...' : 'Save'}</span>
+                    </button>
+
+                    {/* RUN BUTTON */}
+                    <button 
+                        onClick={runCode}
+                        disabled={isRunning}
+                        className="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold transition disabled:opacity-50"
+                    >
+                        {isRunning ? <Loader2 size={14} className="animate-spin"/> : <Play size={14} fill="white" />}
+                        <span className="hidden sm:inline">{isRunning ? 'Running...' : 'Run'}</span>
+                    </button>
+                </div>
+            </div>
+            
+            {/* Editor & Terminal */}
+            <div className="flex-1 flex flex-col min-h-0"> 
+                <div className="flex-1 relative">
+                    <Editor
+                        height="100%"
+                        width="100%"
+                        language={language}
+                        theme="vs-dark"
+                        onMount={handleEditorDidMount}
+                        loading={<div className="text-gray-500 p-4">Loading Editor...</div>}
+                        options={{
+                            minimap: { enabled: false },
+                            fontSize: 14,
+                            fontFamily: '"Fira Code", monospace',
+                            scrollBeyondLastLine: false,
+                            automaticLayout: true,
+                            padding: { top: 16, bottom: 16 }
+                        }}
+                    />
+                </div>
+                <div style={{ height: '200px' }} className="bg-[#010409] border-t border-[#30363d] flex flex-col shrink-0">
+                    <div className="h-8 bg-[#0d1117] border-b border-[#30363d] flex items-center px-4 gap-2 text-gray-400 text-xs font-bold uppercase tracking-wider shrink-0">
+                        <TerminalIcon size={14} />
+                        <span>Terminal / Output</span>
+                    </div>
+                    <div className="flex-1 p-3 font-mono text-sm text-gray-300 overflow-auto custom-scrollbar whitespace-pre-wrap">
+                        {output}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default CodeEditor;
